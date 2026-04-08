@@ -20,6 +20,7 @@
 - **Live Session Monitoring** — Track multiple Claude Code sessions in real-time
 - **Permission Approvals** — Approve or deny tool executions directly from the notch
 - **Chat History** — View full conversation history with markdown rendering
+- **Plan Usage Limits** — Shows 5-hour session and weekly usage percentages in the header (e.g. `5h: 14% · W: 36%`), color-coded as limits approach
 - **Auto-Setup** — Hooks install automatically on first launch
 
 ## Requirements
