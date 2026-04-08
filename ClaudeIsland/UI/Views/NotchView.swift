@@ -26,6 +26,7 @@ struct NotchView: View {
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
+    @State private var checkmarkHideTask: DispatchWorkItem?
 
     @Namespace private var activityNamespace
 
@@ -465,19 +466,18 @@ struct NotchView: View {
             }
 
             // Trigger bounce animation to get user's attention
-            DispatchQueue.main.async {
-                isBouncing = true
-                // Bounce back after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    isBouncing = false
-                }
+            isBouncing = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                isBouncing = false
             }
 
-            // Schedule hiding the checkmark after 30 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [self] in
-                // Trigger a UI update to re-evaluate hasWaitingForInput
+            // Cancel any pending hide timer and schedule a fresh one
+            checkmarkHideTask?.cancel()
+            let task = DispatchWorkItem { [self] in
                 handleProcessingChange()
             }
+            checkmarkHideTask = task
+            DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: task)
         }
 
         previousWaitingForInputIds = currentIds

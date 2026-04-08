@@ -79,7 +79,7 @@ struct SoundPickerRow: View {
                         }
                     }
                 }
-                .frame(maxHeight: CGFloat(min(NotificationSound.allCases.count, 6)) * 32)
+                .frame(maxHeight: soundSelector.expandedPickerHeight)
                 .padding(.leading, 28)
                 .padding(.top, 4)
             }

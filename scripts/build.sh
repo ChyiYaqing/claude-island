@@ -19,20 +19,20 @@ cd "$PROJECT_DIR"
 
 # Build and archive
 echo "Archiving..."
-xcodebuild archive \
-    -scheme ClaudeIsland \
-    -configuration Release \
-    -archivePath "$ARCHIVE_PATH" \
-    -destination "generic/platform=macOS" \
-    ENABLE_HARDENED_RUNTIME=YES \
-    CODE_SIGN_STYLE=Automatic \
-    | xcpretty || xcodebuild archive \
-    -scheme ClaudeIsland \
-    -configuration Release \
-    -archivePath "$ARCHIVE_PATH" \
-    -destination "generic/platform=macOS" \
-    ENABLE_HARDENED_RUNTIME=YES \
+XCODEBUILD_ARGS=(
+    archive
+    -scheme ClaudeIsland
+    -configuration Release
+    -archivePath "$ARCHIVE_PATH"
+    -destination "generic/platform=macOS"
+    ENABLE_HARDENED_RUNTIME=YES
     CODE_SIGN_STYLE=Automatic
+)
+if command -v xcpretty &>/dev/null; then
+    xcodebuild "${XCODEBUILD_ARGS[@]}" | xcpretty
+else
+    xcodebuild "${XCODEBUILD_ARGS[@]}"
+fi
 
 # Create ExportOptions.plist if it doesn't exist
 EXPORT_OPTIONS="$BUILD_DIR/ExportOptions.plist"
@@ -42,7 +42,7 @@ cat > "$EXPORT_OPTIONS" << 'EOF'
 <plist version="1.0">
 <dict>
     <key>method</key>
-    <string>developer-id</string>
+    <string>debugging</string>
     <key>destination</key>
     <string>export</string>
     <key>signingStyle</key>
@@ -54,14 +54,17 @@ EOF
 # Export the archive
 echo ""
 echo "Exporting..."
-xcodebuild -exportArchive \
-    -archivePath "$ARCHIVE_PATH" \
-    -exportPath "$EXPORT_PATH" \
-    -exportOptionsPlist "$EXPORT_OPTIONS" \
-    | xcpretty || xcodebuild -exportArchive \
-    -archivePath "$ARCHIVE_PATH" \
-    -exportPath "$EXPORT_PATH" \
+EXPORT_ARGS=(
+    -exportArchive
+    -archivePath "$ARCHIVE_PATH"
+    -exportPath "$EXPORT_PATH"
     -exportOptionsPlist "$EXPORT_OPTIONS"
+)
+if command -v xcpretty &>/dev/null; then
+    xcodebuild "${EXPORT_ARGS[@]}" | xcpretty
+else
+    xcodebuild "${EXPORT_ARGS[@]}"
+fi
 
 echo ""
 echo "=== Build Complete ==="
