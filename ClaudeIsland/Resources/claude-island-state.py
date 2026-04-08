@@ -71,6 +71,37 @@ def send_event(state):
         return None
 
 
+def _add_to_allow_list(tool_name: str, tool_input: dict):
+    """Add a tool pattern to ~/.claude/settings.json permissions.allow"""
+    import re
+    settings_path = os.path.expanduser("~/.claude/settings.json")
+
+    # Build a pattern like "Bash(git push:*)" from tool + first word of command
+    if tool_name == "Bash":
+        command = tool_input.get("command", "")
+        first_word = command.strip().split()[0] if command.strip() else ""
+        pattern = f"Bash({first_word}:*)" if first_word else "Bash(*)"
+    else:
+        pattern = f"{tool_name}(*)"
+
+    try:
+        data = {}
+        if os.path.exists(settings_path):
+            with open(settings_path) as f:
+                data = json.load(f)
+
+        permissions = data.setdefault("permissions", {})
+        allow_list = permissions.setdefault("allow", [])
+
+        if pattern not in allow_list:
+            allow_list.append(pattern)
+            with open(settings_path, "w") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.write("\n")
+    except Exception:
+        pass  # Best-effort; don't block the allow response
+
+
 def main():
     try:
         data = json.load(sys.stdin)
@@ -132,7 +163,13 @@ def main():
             decision = response.get("decision", "ask")
             reason = response.get("reason", "")
 
-            if decision == "allow":
+            if decision in ("allow", "allowAlways"):
+                if decision == "allowAlways":
+                    # Add tool to ~/.claude/settings.json permissions.allow
+                    tool_name = state.get("tool", "")
+                    tool_input_data = state.get("tool_input", {})
+                    _add_to_allow_list(tool_name, tool_input_data)
+
                 # Output JSON to approve
                 output = {
                     "hookSpecificOutput": {

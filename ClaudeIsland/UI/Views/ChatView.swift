@@ -413,6 +413,7 @@ struct ChatView: View {
             tool: tool,
             toolInput: session.pendingToolInput,
             onApprove: { approvePermission() },
+            onAllowAlways: { allowAlwaysPermission() },
             onDeny: { denyPermission() }
         )
     }
@@ -456,6 +457,10 @@ struct ChatView: View {
 
     private func approvePermission() {
         sessionMonitor.approvePermission(sessionId: sessionId)
+    }
+
+    private func allowAlwaysPermission() {
+        sessionMonitor.allowAlwaysPermission(sessionId: sessionId)
     }
 
     private func denyPermission() {
@@ -1050,10 +1055,12 @@ struct ChatApprovalBar: View {
     let tool: String
     let toolInput: String?
     let onApprove: () -> Void
+    let onAllowAlways: () -> Void
     let onDeny: () -> Void
 
     @State private var showContent = false
     @State private var showAllowButton = false
+    @State private var showAllowAlwaysButton = false
     @State private var showDenyButton = false
 
     var body: some View {
@@ -1091,6 +1098,22 @@ struct ChatApprovalBar: View {
             .opacity(showDenyButton ? 1 : 0)
             .scaleEffect(showDenyButton ? 1 : 0.8)
 
+            // Allow Always button
+            Button {
+                onAllowAlways()
+            } label: {
+                Text("Always")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.white.opacity(0.85))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.2))
+                    .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .opacity(showAllowAlwaysButton ? 1 : 0)
+            .scaleEffect(showAllowAlwaysButton ? 1 : 0.8)
+
             // Allow button
             Button {
                 onApprove()
@@ -1119,6 +1142,9 @@ struct ChatApprovalBar: View {
                 showDenyButton = true
             }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.7).delay(0.15)) {
+                showAllowAlwaysButton = true
+            }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.7).delay(0.2)) {
                 showAllowButton = true
             }
         }
