@@ -20,6 +20,7 @@ struct NotchView: View {
     @StateObject private var sessionMonitor = ClaudeSessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
+    @ObservedObject private var usageService = UsageService.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
@@ -315,6 +316,11 @@ struct NotchView: View {
 
             Spacer()
 
+            // Usage limits display
+            if let usage = usageService.data {
+                UsageLimitsView(data: usage)
+            }
+
             // Menu toggle
             Button {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
@@ -401,6 +407,8 @@ struct NotchView: View {
         switch newStatus {
         case .opened, .popping:
             isVisible = true
+            // Refresh weekly usage whenever the island opens
+            Task { await usageService.refresh() }
             // Clear waiting-for-input timestamps only when manually opened (user acknowledged)
             if viewModel.openReason == .click || viewModel.openReason == .hover {
                 waitingForInputTimestamps.removeAll()
