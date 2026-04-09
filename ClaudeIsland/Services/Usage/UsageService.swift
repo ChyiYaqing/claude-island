@@ -187,19 +187,22 @@ final class UsageService: ObservableObject {
         guard !bin.isEmpty else { return nil }
 
         // claude binary lives in .../bin/claude; cli.js is at .../cli.js
-        var dir = URL(fileURLWithPath: bin).resolvingSymlinksInPath().deletingLastPathComponent()
+        let resolved = URL(fileURLWithPath: bin).resolvingSymlinksInPath()
+        var dir = resolved.deletingLastPathComponent()
         for _ in 0..<3 {
             let candidate = dir.appendingPathComponent("cli.js").path
             if FileManager.default.fileExists(atPath: candidate) { return candidate }
             dir = dir.deletingLastPathComponent()
         }
-        return nil
+        // Fallback: the binary itself may be a bundled JS binary containing CLIENT_ID
+        return resolved.path
     }
 
     private static func clientIDInFile(_ path: String) -> String? {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
-        p.arguments = ["-om1", "CLIENT_ID:\"[^\"]*\"", path]
+        // -a: treat binary as text  -o: only print match  -m1: first match only
+        p.arguments = ["-aom1", "CLIENT_ID:\"[^\"]*\"", path]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = Pipe()
