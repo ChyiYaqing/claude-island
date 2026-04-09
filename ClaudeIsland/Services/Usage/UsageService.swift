@@ -37,10 +37,23 @@ final class UsageService: ObservableObject {
 
     // 5-minute cache TTL
     private let cacheTTL: TimeInterval = 5 * 60
+    // In-memory token cache to avoid redundant keychain reads after refresh
+    private var cachedAccessToken: String?
+    private var cachedTokenExpiry: Date?
 
     private init() {
         loadCache()
         Task { await refresh() }
+        startPeriodicRefresh()
+    }
+
+    private func startPeriodicRefresh() {
+        Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 10 * 60 * 1_000_000_000) // every 10 min
+                await refresh()
+            }
+        }
     }
 
     func refresh() async {
@@ -49,43 +62,159 @@ final class UsageService: ObservableObject {
             return
         }
 
-        guard let token = readOAuthToken(), !token.isEmpty else { return }
+        guard let token = await getValidToken(), !token.isEmpty else { return }
 
         guard let result = await fetchUsage(accessToken: token) else { return }
         data = result
         saveCache(result)
     }
 
-    // MARK: - Keychain
+    // MARK: - Token Management
 
-    private func readOAuthToken() -> String? {
-        // Primary: read from macOS Keychain (service: "Claude Code-credentials")
+    /// Returns a valid (non-expired) access token, refreshing via refresh_token if needed.
+    private func getValidToken() async -> String? {
+        // Use in-memory cached token if still valid
+        if let token = cachedAccessToken, let expiry = cachedTokenExpiry, Date() < expiry {
+            return token
+        }
+
         let serviceNames = ["Claude Code-credentials", "claude-code-credentials", "Claude-Code-credentials"]
         for service in serviceNames {
-            if let token = keychainToken(service: service) {
-                return token
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne
+            ]
+            var result: AnyObject?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                  let keychainData = result as? Data,
+                  let creds = try? JSONDecoder().decode(CredentialsFile.self, from: keychainData),
+                  let oauth = creds.claudeAiOauth,
+                  let accessToken = oauth.accessToken, !accessToken.isEmpty
+            else { continue }
+
+            // Check token expiry (with 60s buffer)
+            if let expAt = oauth.expiresAt {
+                let expDate = Date(timeIntervalSince1970: expAt > 1e10 ? expAt / 1000.0 : expAt)
+                if Date() < expDate.addingTimeInterval(-60) {
+                    // Token still valid
+                    cachedAccessToken = accessToken
+                    cachedTokenExpiry = expDate
+                    return accessToken
+                }
+                // Token expired — try refresh
+                if let refreshToken = oauth.refreshToken,
+                   let newToken = await performTokenRefresh(refreshToken: refreshToken) {
+                    cachedAccessToken = newToken
+                    cachedTokenExpiry = Date().addingTimeInterval(3600)
+                    return newToken
+                }
+                // Refresh failed, try the expired token anyway (server may still accept it briefly)
+                return accessToken
             }
+
+            return accessToken
         }
-        // Fallback: read from ~/.claude/.credentials.json
+
+        // Fallback: credentials file
         return fileCredentialsToken()
     }
 
-    private func keychainToken(service: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+    /// Exchanges a refresh_token for a new access_token via Anthropic OAuth endpoint.
+    private func performTokenRefresh(refreshToken: String) async -> String? {
+        guard let url = URL(string: "https://console.anthropic.com/v1/oauth/token") else { return nil }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        guard let clientID = UsageService.oauthClientID else { return nil }
+        let body: [String: String] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientID
         ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let credentials = try? JSONDecoder().decode(CredentialsFile.self, from: data),
-              let token = credentials.claudeAiOauth?.accessToken
+        guard let bodyData = try? JSONEncoder().encode(body) else { return nil }
+        request.httpBody = bodyData
+
+        guard let (responseData, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse,
+              http.statusCode == 200,
+              let tokenResp = try? JSONDecoder().decode(TokenRefreshResponse.self, from: responseData)
         else { return nil }
-        return token
+
+        return tokenResp.accessToken
     }
+
+    // MARK: - OAuth Client ID Discovery
+
+    /// Reads CLIENT_ID from the Claude Code CLI installation.
+    static let oauthClientID: String? = {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+
+        var candidates = [
+            "/usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+            "/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+            "\(home)/.npm/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+        ]
+
+        // Best-effort: resolve `which claude` → find cli.js near the binary
+        if let dynamic = cliJSFromWhich() { candidates.insert(dynamic, at: 0) }
+
+        for path in candidates {
+            guard fm.fileExists(atPath: path), let id = clientIDInFile(path) else { continue }
+            return id
+        }
+
+        return nil
+    }()
+
+    private static func cliJSFromWhich() -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        p.arguments = ["claude"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return nil }
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { return nil }
+
+        let bin = (String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bin.isEmpty else { return nil }
+
+        // claude binary lives in .../bin/claude; cli.js is at .../cli.js
+        var dir = URL(fileURLWithPath: bin).resolvingSymlinksInPath().deletingLastPathComponent()
+        for _ in 0..<3 {
+            let candidate = dir.appendingPathComponent("cli.js").path
+            if FileManager.default.fileExists(atPath: candidate) { return candidate }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
+    }
+
+    private static func clientIDInFile(_ path: String) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
+        p.arguments = ["-om1", "CLIENT_ID:\"[^\"]*\"", path]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        guard (try? p.run()) != nil else { return nil }
+        p.waitUntilExit()
+
+        // Output format: CLIENT_ID:"<uuid>"  → extract the uuid
+        let raw = (String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = raw.components(separatedBy: "\"")
+        guard parts.count >= 2, !parts[1].isEmpty else { return nil }
+        return parts[1]
+    }
+
+    // MARK: - Keychain (read-only helpers)
 
     private func fileCredentialsToken() -> String? {
         let path = FileManager.default.homeDirectoryForCurrentUser
@@ -116,9 +245,7 @@ final class UsageService: ObservableObject {
         guard let apiResp = try? JSONDecoder().decode(UsageApiResponse.self, from: responseData)
         else { return nil }
 
-        // Determine plan name from keychain subscriptionType
         let planName = keychainPlanName() ?? "Pro"
-
         let iso = ISO8601DateFormatter()
         // API returns utilization as a percentage (e.g. 14.0 = 14%), normalize to 0.0–1.0
         return UsageLimitData(
@@ -174,7 +301,7 @@ final class UsageService: ObservableObject {
     private func loadCache() {
         guard let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(CacheFile.self, from: data),
-              Date().timeIntervalSince(cache.lastUpdated) < cacheTTL * 2  // Accept up to 10min stale on launch
+              Date().timeIntervalSince(cache.lastUpdated) < 3600  // Accept up to 1 hour stale on launch
         else { return }
 
         self.data = UsageLimitData(
@@ -213,6 +340,18 @@ private struct OAuthCredentials: Decodable {
     let subscriptionType: String?
     let rateLimitTier: String?
     let expiresAt: Double?
+}
+
+private struct TokenRefreshResponse: Decodable {
+    let accessToken: String
+    let refreshToken: String?
+    let expiresIn: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+        case refreshToken = "refresh_token"
+        case expiresIn = "expires_in"
+    }
 }
 
 private struct UsageApiResponse: Decodable {
