@@ -81,10 +81,11 @@ class NotchPanel: NSPanel {
                 let screenLocation = convertPoint(toScreen: locationInWindow)
                 ignoresMouseEvents = true
 
-                // Re-post the event after a tiny delay, then restore mouse event handling
+                // Re-post the event so it reaches windows/menu bar behind us.
+                // Do NOT restore ignoresMouseEvents here — NotchWindowController's
+                // viewModel.$status subscription is the single source of truth.
                 DispatchQueue.main.async { [weak self] in
                     self?.repostMouseEvent(event, at: screenLocation)
-                    self?.ignoresMouseEvents = false
                 }
                 return
             }
