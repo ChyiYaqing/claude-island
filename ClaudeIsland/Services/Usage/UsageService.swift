@@ -127,6 +127,7 @@ final class UsageService: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("claude-code/2.1", forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 15
 
         guard let clientID = UsageService.oauthClientID else { return nil }
@@ -248,11 +249,24 @@ final class UsageService: ObservableObject {
         request.timeoutInterval = 15
 
         guard let (responseData, response) = try? await URLSession.shared.data(for: request),
-              let http = response as? HTTPURLResponse,
-              http.statusCode == 200
+              let http = response as? HTTPURLResponse
         else { return nil }
 
-        guard let apiResp = try? JSONDecoder().decode(UsageApiResponse.self, from: responseData)
+        // 429 = usage limit hit: show 100% so the UI reflects the blocked state
+        if http.statusCode == 429 {
+            let planName = keychainPlanName() ?? "Pro"
+            return UsageLimitData(
+                planName: planName,
+                fiveHourPercent: 1.0,
+                sevenDayPercent: data?.sevenDayPercent,
+                fiveHourResetAt: nil,
+                sevenDayResetAt: data?.sevenDayResetAt,
+                lastUpdated: Date()
+            )
+        }
+
+        guard http.statusCode == 200,
+              let apiResp = try? JSONDecoder().decode(UsageApiResponse.self, from: responseData)
         else { return nil }
 
         let planName = keychainPlanName() ?? "Pro"
@@ -311,7 +325,7 @@ final class UsageService: ObservableObject {
     private func loadCache() {
         guard let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(CacheFile.self, from: data),
-              Date().timeIntervalSince(cache.lastUpdated) < 3600  // Accept up to 1 hour stale on launch
+              Date().timeIntervalSince(cache.lastUpdated) < 86400  // Accept up to 24 hours stale on launch
         else { return }
 
         self.data = UsageLimitData(
