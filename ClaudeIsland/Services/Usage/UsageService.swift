@@ -203,24 +203,18 @@ final class UsageService: ObservableObject {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/grep")
         // -a: treat binary as text  -o: only print match  -m1: first match only
-        // Use specific pattern with OAUTH_FILE_SUFFIX to identify the Claude Code OAuth client,
-        // avoiding other unrelated CLIENT_ID entries in the binary.
-        p.arguments = ["-aom1", "CLIENT_ID:\"[^\"]*\",OAUTH_FILE_SUFFIX", path]
+        // Match production client specifically: OAUTH_FILE_SUFFIX:"" (empty = prod, non-empty = local/dev)
+        p.arguments = ["-aom1", "CLIENT_ID:\"[^\"]*\",OAUTH_FILE_SUFFIX:\"\"", path]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = Pipe()
         guard (try? p.run()) != nil else { return nil }
         p.waitUntilExit()
 
-        // Output format: CLIENT_ID:"<uuid>",OAUTH_FILE_SUFFIX  → extract the uuid
-        // Take the LAST match: binary may contain an old (expired) CLIENT_ID first,
-        // followed by the current valid one.
+        // Output: CLIENT_ID:"<uuid>",OAUTH_FILE_SUFFIX:""  → extract the uuid
         let raw = (String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        // Find the last occurrence of CLIENT_ID:"..."
-        let lines = raw.components(separatedBy: .newlines).filter { $0.contains("CLIENT_ID:") }
-        guard let lastLine = lines.last else { return nil }
-        let parts = lastLine.components(separatedBy: "\"")
+        let parts = raw.components(separatedBy: "\"")
         guard parts.count >= 2, !parts[1].isEmpty else { return nil }
         return parts[1]
     }
