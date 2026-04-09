@@ -246,19 +246,6 @@ final class UsageService: ObservableObject {
               let http = response as? HTTPURLResponse
         else { return nil }
 
-        // 429 = usage limit hit: show 100% so the UI reflects the blocked state
-        if http.statusCode == 429 {
-            let planName = keychainPlanName() ?? "Pro"
-            return UsageLimitData(
-                planName: planName,
-                fiveHourPercent: 1.0,
-                sevenDayPercent: data?.sevenDayPercent,
-                fiveHourResetAt: nil,
-                sevenDayResetAt: data?.sevenDayResetAt,
-                lastUpdated: Date()
-            )
-        }
-
         guard http.statusCode == 200,
               let apiResp = try? JSONDecoder().decode(UsageApiResponse.self, from: responseData)
         else { return nil }
