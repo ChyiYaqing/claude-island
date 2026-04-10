@@ -40,6 +40,8 @@ final class UsageService: ObservableObject {
     // In-memory token cache to avoid redundant keychain reads after refresh
     private var cachedAccessToken: String?
     private var cachedTokenExpiry: Date?
+    // Backoff: don't hammer the API after a 429
+    private var nextAllowedRefresh: Date = .distantPast
 
     private init() {
         loadCache()
@@ -61,6 +63,8 @@ final class UsageService: ObservableObject {
         if let cached = data, Date().timeIntervalSince(cached.lastUpdated) < cacheTTL {
             return
         }
+        // Backoff: skip if we got 429 recently
+        guard Date() >= nextAllowedRefresh else { return }
 
         guard let token = await getValidToken(), !token.isEmpty else { return }
 
@@ -245,6 +249,12 @@ final class UsageService: ObservableObject {
         guard let (responseData, response) = try? await URLSession.shared.data(for: request),
               let http = response as? HTTPURLResponse
         else { return nil }
+
+        // 429: back off for 1 hour before retrying
+        if http.statusCode == 429 {
+            nextAllowedRefresh = Date().addingTimeInterval(3600)
+            return nil
+        }
 
         guard http.statusCode == 200,
               let apiResp = try? JSONDecoder().decode(UsageApiResponse.self, from: responseData)
